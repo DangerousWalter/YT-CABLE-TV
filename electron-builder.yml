@@ -1,0 +1,50 @@
+# Settings for building the installers. Build each one on its own operating system:
+#   Windows:  npm run dist:win     ->  release/Retro-Cable TV Setup <version>.exe
+#   macOS:    npm run dist:mac     ->  release/Retro-Cable TV-<version>-<arch>.dmg   (Apple Silicon and Intel)
+appId: com.retrocabletv.app
+productName: Retro-Cable TV
+copyright: Retro-Cable TV
+
+directories:
+  output: release
+  buildResources: build
+
+# Only what the app needs at run time. (better-sqlite3 is for `npm run server` on a normal Node install;
+# the desktop app uses Node's built-in node:sqlite, so nothing native has to be compiled.)
+files:
+  - dist/**
+  - electron/**
+  - server.cjs
+  - server/**
+  - package.json
+  - "!**/*.map"
+  - "!node_modules/better-sqlite3/**"
+  - "!node_modules/.cache/**"
+
+npmRebuild: false
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: build/icon.png
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  shortcutName: Retro-Cable TV
+
+mac:
+  target:
+    - target: dmg
+      arch:
+        - x64
+        - arm64
+  category: public.app-category.entertainment
+  icon: build/icon.png
+
+dmg:
+  title: Retro-Cable TV

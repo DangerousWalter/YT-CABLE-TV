@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Retro-Cable TV: TV check</title>
+<style>
+  /* Deliberately plain CSS and old-fashioned JavaScript: this page has to run on the oldest TV browser. */
+  html, body { margin: 0; background: #000; color: #eee; font-family: Arial, Helvetica, sans-serif; }
+  body { padding: 20px 36px 40px 36px; font-size: 24px; line-height: 1.3; }
+  h1 { font-size: 38px; color: #f0b100; margin: 0 0 4px 0; }
+  .sub { color: #9ca3af; font-size: 21px; margin-bottom: 14px; }
+  .v { display: inline-block; margin: 0 12px 10px 0; padding: 8px 16px; border-radius: 8px; font-weight: bold; font-size: 26px; }
+  .ok { background: #14532d; color: #bbf7d0; }
+  .bad { background: #7f1d1d; color: #fecaca; }
+  .warn { background: #713f12; color: #fde68a; }
+  .wait { background: #1f2937; color: #d1d5db; }
+  h2 { font-size: 27px; color: #93c5fd; margin: 22px 0 6px 0; border-bottom: 1px solid #1f2937; }
+  table { border-collapse: collapse; width: 100%; }
+  td { padding: 3px 10px; border-bottom: 1px solid #1a1a1a; vertical-align: top; }
+  td.n { width: 46%; color: #d1d5db; }
+  .y { color: #4ade80; } .x { color: #f87171; } .m { color: #facc15; }
+  pre { background: #111; padding: 12px; font-size: 19px; white-space: pre-wrap; word-wrap: break-word; color: #fde68a; }
+  #keys { font-family: monospace; font-size: 22px; min-height: 120px; color: #a7f3d0; }
+  #ytwrap { float: right; width: 480px; margin: 0 0 10px 20px; }
+  #ytstatus { font-size: 20px; color: #fde68a; margin-top: 4px; }
+  #probe-wrap { position: absolute; left: -9999px; top: 0; }
+  .clear { clear: both; }
+</style>
+</head>
+<body>
+<h1>Retro-Cable TV: TV check</h1>
+<div class="sub">Leave this page open for about 30 seconds. Then press some remote buttons (arrows, OK, Back, the color buttons, channel up/down) and read the results.</div>
+
+<div id="verdicts"><span class="v wait">Checking...</span></div>
+
+<div id="ytwrap"><div id="yt"></div><div id="ytstatus">YouTube: waiting...</div></div>
+
+<h2>This TV</h2>
+<table id="t-env"></table>
+
+<h2>Styling features (the app's look needs these)</h2>
+<table id="t-css"></table>
+
+<h2>Script features</h2>
+<table id="t-js"></table>
+
+<h2>Speed</h2>
+<table id="t-speed"></table>
+
+<h2>Sound and video</h2>
+<table id="t-media"></table>
+
+<div class="clear"></div>
+<h2>Remote control: press buttons</h2>
+<div id="keys">(nothing pressed yet)</div>
+
+<h2>Short report (a photo of this is all I need)</h2>
+<pre id="report">...</pre>
+
+<div id="probe-wrap"><div id="probe"></div></div>
+
+<script>
+(function () {
+  var rows = { env: [], css: [], js: [], speed: [], media: [] };
+  var facts = {};            // short key -> short value, for the report
+  var ytState = { phase: 'waiting', playedAt: null, error: null, startedAt: null, scriptMs: null };
+  var audio = { state: 'not tested', afterKey: null };
+
+  function add(group, name, status, detail) { rows[group].push({ name: name, status: status, detail: detail || '' }); }
+  function yesNo(v) { return v ? 'yes' : 'NO'; }
+
+  function render() {
+    ['env', 'css', 'js', 'speed', 'media'].forEach(function (g) {
+      var html = '';
+      rows[g].forEach(function (r) {
+        var cls = r.status === true ? 'y' : r.status === false ? 'x' : 'm';
+        var mark = r.status === true ? 'OK ' : r.status === false ? 'NO ' : '';
+        html += '<tr><td class="n">' + r.name + '</td><td class="' + cls + '">' + mark + r.detail + '</td></tr>';
+      });
+      document.getElementById('t-' + g).innerHTML = html;
+    });
+  }
+
+  // ---------- environment ----------
+  var ua = navigator.userAgent || '';
+  var chromeMatch = /Chrom(?:e|ium)\/(\d+)/.exec(ua);
+  var chromeVer = chromeMatch ? parseInt(chromeMatch[1], 10) : null;
+  var tizenMatch = /Tizen[ \/]([\d.]+)/.exec(ua);
+  var dpr = window.devicePixelRatio || 1;
+  facts.chrome = chromeVer ? String(chromeVer) : '?';
+  facts.tizen = tizenMatch ? tizenMatch[1] : '?';
+  facts.screen = window.innerWidth + 'x' + window.innerHeight + '@' + dpr;
+
+  add('env', 'Browser engine (Chromium version)', chromeVer ? (chromeVer >= 111 ? true : null) : null, chromeVer ? String(chromeVer) + (chromeVer >= 111 ? '' : '  (older than 111)') : 'not found');
+  add('env', 'Tizen version', tizenMatch ? true : null, tizenMatch ? tizenMatch[1] : 'not shown');
+  add('env', 'Screen (CSS pixels)', null, window.innerWidth + ' x ' + window.innerHeight + '  at ' + dpr + 'x');
+  add('env', 'Tizen app programming interface here', null, typeof window.tizen === 'undefined' ? 'not available (normal in the browser)' : 'available');
+  add('env', 'Full browser identification', null, '<span style="font-size:17px">' + ua.replace(/</g, '&lt;') + '</span>');
+
+  // ---------- CSS ----------
+  function cssSupports(a, b) {
+    try { return !!(window.CSS && CSS.supports && (b === undefined ? CSS.supports(a) : CSS.supports(a, b))); } catch (e) { return false; }
+  }
+  var cssTests = {
+    oklch: cssSupports('color', 'oklch(50% 0.1 200)'),
+    colormix: cssSupports('color', 'color-mix(in srgb, red 50%, blue)'),
+    property: !!(window.CSS && typeof CSS.registerProperty === 'function'),
+    aspect: cssSupports('aspect-ratio', '16 / 9'),
+    has: cssSupports('selector(:has(a))'),
+    cv: cssSupports('content-visibility', 'auto'),
+    clamp: cssSupports('width', 'clamp(1px, 2px, 3px)'),
+    inset: cssSupports('inset', '0'),
+    backdrop: cssSupports('backdrop-filter', 'blur(4px)') || cssSupports('-webkit-backdrop-filter', 'blur(4px)')
+  };
+
+  // cascade layers: only counts if a rule inside @layer really applies
+  var layers = false;
+  try {
+    var st = document.createElement('style');
+    st.textContent = '@layer probeLayer { #probe { width: 123px; height: 7px; } }';
+    document.head.appendChild(st);
+    layers = document.getElementById('probe').offsetWidth === 123;
+    document.head.removeChild(st);
+  } catch (e) { layers = false; }
+  cssTests.layers = layers;
+
+  // flex gap
+  var gap = false;
+  try {
+    var probe = document.getElementById('probe');
+    probe.innerHTML = '<div style="display:flex;gap:7px"><div style="width:10px;height:5px"></div><div id="g2" style="width:10px;height:5px"></div></div>';
+    gap = document.getElementById('g2').offsetLeft === 17;
+    probe.innerHTML = '';
+  } catch (e) { gap = false; }
+  cssTests.gap = gap;
+
+  add('css', 'Cascade layers (@layer)', cssTests.layers, yesNo(cssTests.layers));
+  add('css', 'Modern colors: oklch()', cssTests.oklch, yesNo(cssTests.oklch));
+  add('css', 'Color mixing: color-mix()', cssTests.colormix, yesNo(cssTests.colormix));
+  add('css', 'Typed custom properties (@property)', cssTests.property, yesNo(cssTests.property));
+  add('css', 'Flexbox gap', cssTests.gap, yesNo(cssTests.gap));
+  add('css', 'aspect-ratio', cssTests.aspect, yesNo(cssTests.aspect));
+  add('css', 'clamp()', cssTests.clamp, yesNo(cssTests.clamp));
+  add('css', 'inset', cssTests.inset, yesNo(cssTests.inset));
+  add('css', 'content-visibility', cssTests.cv, yesNo(cssTests.cv));
+  add('css', ':has() selector', cssTests.has, yesNo(cssTests.has));
+  add('css', 'Backdrop blur', cssTests.backdrop, yesNo(cssTests.backdrop));
+
+  // ---------- JavaScript ----------
+  function tryFn(code) { try { return !!new Function(code)(); } catch (e) { return false; } }
+  var jsTests = [
+    ['Promises and fetch', typeof Promise !== 'undefined' && typeof fetch === 'function'],
+    ['async / await', tryFn('return (async function () {}) && true')],
+    ['Optional chaining  a?.b', tryFn('var a = {}; return a?.b === undefined')],
+    ['Nullish  a ?? b', tryFn('return (null ?? 1) === 1')],
+    ['ResizeObserver', typeof ResizeObserver === 'function'],
+    ['IntersectionObserver', typeof IntersectionObserver === 'function'],
+    ['Web Audio (sound effects, jazz)', !!(window.AudioContext || window.webkitAudioContext)],
+    ['Intl.DateTimeFormat', typeof Intl !== 'undefined' && typeof Intl.DateTimeFormat === 'function'],
+    ['Array.at()', typeof [].at === 'function'],
+    ['Object.fromEntries()', typeof Object.fromEntries === 'function'],
+    ['String.replaceAll()', typeof ''.replaceAll === 'function'],
+    ['structuredClone()', typeof structuredClone === 'function'],
+    ['requestAnimationFrame', typeof requestAnimationFrame === 'function'],
+    ['URLSearchParams', typeof URLSearchParams === 'function'],
+    ['Fullscreen API', !!(document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen)]
+  ];
+  var jsMissing = [];
+  jsTests.forEach(function (t) { add('js', t[0], t[1], yesNo(t[1])); if (!t[1]) jsMissing.push(t[0]); });
+
+  var storage = false;
+  try { localStorage.setItem('rtv-check', '1'); storage = localStorage.getItem('rtv-check') === '1'; localStorage.removeItem('rtv-check'); } catch (e) { storage = false; }
+  add('js', 'Saving settings (localStorage)', storage, yesNo(storage));
+
+  // ---------- speed ----------
+  var cpuMs = null, domMs = null, noiseMs = null;
+  function runSpeed() {
+    var t = performance.now(), x = 0, i;
+    for (i = 0; i < 3000000; i++) x += Math.sqrt(i);
+    cpuMs = Math.round(performance.now() - t);
+
+    t = performance.now();
+    var box = document.createElement('div');
+    box.style.cssText = 'position:absolute;left:-9999px;top:0;width:900px';
+    for (i = 0; i < 1500; i++) {
+      var d = document.createElement('div');
+      d.style.cssText = 'display:flex;height:20px;border-bottom:1px solid #333;padding:2px 6px';
+      d.innerHTML = '<span style="width:120px">CH ' + i + '</span><span>Program title ' + i + '</span>';
+      box.appendChild(d);
+    }
+    document.body.appendChild(box);
+    box.getBoundingClientRect();
+    domMs = Math.round(performance.now() - t);
+    document.body.removeChild(box);
+
+    try {
+      var c = document.createElement('canvas'); c.width = 960; c.height = 540;
+      var ctx = c.getContext('2d'); var img = ctx.createImageData(960, 540); var px = new Uint32Array(img.data.buffer);
+      t = performance.now();
+      for (var f = 0; f < 3; f++) {
+        for (i = 0; i < px.length; i++) { var v = (Math.random() * 255) | 0; px[i] = 0xff000000 | (v << 16) | (v << 8) | v; }
+        ctx.putImageData(img, 0, 0);
+      }
+      noiseMs = Math.round((performance.now() - t) / 3);
+    } catch (e) { noiseMs = null; }
+
+    facts.cpu = cpuMs; facts.dom = domMs; facts.noise = noiseMs;
+    add('speed', 'Number crunching (3 million steps)', cpuMs < 400 ? true : cpuMs < 1200 ? null : false, cpuMs + ' ms');
+    add('speed', 'Drawing 1,500 guide rows', domMs < 350 ? true : domMs < 900 ? null : false, domMs + ' ms');
+    add('speed', 'One frame of TV static (960x540)', noiseMs === null ? null : noiseMs < 45 ? true : noiseMs < 90 ? null : false, noiseMs === null ? 'could not test' : noiseMs + ' ms (static looks smooth below ~45)');
+  }
+  setTimeout(function () { runSpeed(); render(); updateAll(); }, 300);
+
+  // ---------- audio ----------
+  var ac = null;
+  try {
+    var AC = window.AudioContext || window.webkitAudioContext;
+    if (AC) { ac = new AC(); audio.state = ac.state; }
+  } catch (e) { audio.state = 'error'; }
+
+  // ---------- YouTube ----------
+  var ytEl = document.getElementById('ytstatus');
+  function ytSay(text) { ytEl.textContent = 'YouTube: ' + text; }
+  ytState.startedAt = new Date().getTime();
+  ytSay('loading the player script...');
+  var script = document.createElement('script');
+  script.src = 'https://www.youtube.com/iframe_api';
+  script.onerror = function () { ytState.phase = 'script-failed'; ytSay('could not load the player script (no internet, or blocked)'); updateAll(); };
+  window.onYouTubeIframeAPIReady = function () {
+    ytState.scriptMs = new Date().getTime() - ytState.startedAt;
+    ytState.phase = 'creating';
+    ytSay('script loaded in ' + ytState.scriptMs + ' ms, starting a video...');
+    try {
+      new YT.Player('yt', {
+        width: 480, height: 270, videoId: 'jNQXAC9IVRw',
+        playerVars: { autoplay: 1, mute: 1, controls: 0, playsinline: 1, rel: 0 },
+        events: {
+          onReady: function (e) { ytState.phase = 'ready'; ytSay('player ready'); try { e.target.playVideo(); } catch (err) {} updateAll(); },
+          onStateChange: function (e) {
+            var names = { '-1': 'not started', 0: 'ended', 1: 'PLAYING', 2: 'paused', 3: 'buffering', 5: 'cued' };
+            ytSay('state: ' + (names[e.data] || e.data));
+            if (e.data === 1 && ytState.playedAt === null) { ytState.playedAt = new Date().getTime() - ytState.startedAt; ytState.phase = 'playing'; }
+            updateAll();
+          },
+          onError: function (e) { ytState.phase = 'error'; ytState.error = e.data; ytSay('ERROR code ' + e.data); updateAll(); }
+        }
+      });
+    } catch (err) { ytState.phase = 'error'; ytState.error = 'exception'; ytSay('could not start: ' + err); updateAll(); }
+  };
+  document.head.appendChild(script);
+  setTimeout(function () {
+    if (ytState.playedAt === null && ytState.phase !== 'script-failed' && ytState.phase !== 'error') {
+      ytState.phase = 'timeout'; ytSay('nothing played after 25 seconds (last step: ' + ytState.phase + ')'); updateAll();
+    }
+  }, 25000);
+
+  // ---------- remote keys ----------
+  var keyLines = [];
+  document.addEventListener('keydown', function (e) {
+    keyLines.unshift('key="' + e.key + '"  code="' + (e.code || '') + '"  keyCode=' + e.keyCode);
+    if (keyLines.length > 7) keyLines.pop();
+    document.getElementById('keys').innerHTML = keyLines.join('<br>');
+    facts.lastKey = e.keyCode;
+    // pressing a button counts as the "user gesture" that unlocks sound
+    if (ac && ac.state === 'suspended' && ac.resume) {
+      try { ac.resume().then(function () { audio.afterKey = ac.state; updateAll(); }); } catch (err) {}
+    }
+    updateAll();
+  });
+
+  // ---------- verdicts + report ----------
+  function badge(cls, text) { return '<span class="v ' + cls + '">' + text + '</span>'; }
+
+  function updateAll() {
+    // media table
+    rows.media = [];
+    add('media', 'YouTube video plays here', ytState.phase === 'playing' ? true : (ytState.phase === 'waiting' || ytState.phase === 'creating' || ytState.phase === 'ready') ? null : false,
+        ytState.phase === 'playing' ? 'started after ' + (ytState.playedAt / 1000).toFixed(1) + ' s' : ytState.phase + (ytState.error !== null ? ' (code ' + ytState.error + ')' : ''));
+    add('media', 'Sound allowed before any button press', audio.state === 'running' ? true : null, String(audio.state) + (audio.state === 'running' ? '' : '  (normal: it unlocks on the first button press)'));
+    add('media', 'Sound after a button press', audio.afterKey === null ? null : audio.afterKey === 'running', audio.afterKey === null ? 'press any button' : audio.afterKey);
+
+    var styleOk = cssTests.layers && cssTests.oklch && cssTests.colormix;
+    var styleBlocked = !cssTests.layers;
+    var v = '';
+    if (styleOk) v += badge('ok', 'Styling: OK');
+    else if (styleBlocked) v += badge('bad', 'Styling: NOT supported (needs a compatibility build)');
+    else v += badge('warn', 'Styling: colors need a compatibility fix');
+    if (jsMissing.length === 0) v += badge('ok', 'Scripts: OK');
+    else v += badge('warn', 'Scripts: ' + jsMissing.length + ' missing');
+    if (cpuMs === null) v += badge('wait', 'Speed: testing...');
+    else v += badge(domMs < 350 && cpuMs < 400 ? 'ok' : domMs < 900 && cpuMs < 1200 ? 'warn' : 'bad', 'Speed: ' + (domMs < 350 && cpuMs < 400 ? 'good' : domMs < 900 && cpuMs < 1200 ? 'OK' : 'slow'));
+    if (ytState.phase === 'playing') v += badge('ok', 'YouTube: plays');
+    else if (ytState.phase === 'script-failed' || ytState.phase === 'error' || ytState.phase === 'timeout') v += badge('bad', 'YouTube: problem');
+    else v += badge('wait', 'YouTube: testing...');
+    document.getElementById('verdicts').innerHTML = v;
+
+    var layersFlag = cssTests.layers ? 'Y' : 'N';
+    document.getElementById('report').textContent =
+      'Chromium ' + facts.chrome + ' | Tizen ' + facts.tizen + ' | ' + facts.screen + '\n' +
+      'CSS: layers=' + layersFlag + ' oklch=' + (cssTests.oklch ? 'Y' : 'N') + ' colormix=' + (cssTests.colormix ? 'Y' : 'N') +
+      ' property=' + (cssTests.property ? 'Y' : 'N') + ' gap=' + (cssTests.gap ? 'Y' : 'N') + ' has=' + (cssTests.has ? 'Y' : 'N') + ' cv=' + (cssTests.cv ? 'Y' : 'N') + '\n' +
+      'JS missing: ' + (jsMissing.length ? jsMissing.join(', ') : 'none') + ' | storage=' + (storage ? 'Y' : 'N') + '\n' +
+      'Speed ms: cpu=' + facts.cpu + ' dom=' + facts.dom + ' noise=' + facts.noise + '\n' +
+      'YouTube: ' + ytState.phase + (ytState.playedAt !== null ? ' (' + (ytState.playedAt / 1000).toFixed(1) + 's)' : '') + (ytState.error !== null ? ' code=' + ytState.error : '') + '\n' +
+      'Audio: start=' + audio.state + ' afterKey=' + audio.afterKey + (facts.lastKey ? ' | last keyCode=' + facts.lastKey : '');
+    render();
+  }
+
+  render();
+  updateAll();
+})();
+</script>
+</body>
+</html>

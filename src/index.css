@@ -1,0 +1,41 @@
+@import "tailwindcss";
+
+html, body, #root {
+  height: 100%;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  background-color: var(--color-black, #000000);
+  overflow: hidden;
+}
+
+/* Power-off: the picture squashes to a line, then to a dot, then vanishes (like a CRT) */
+@keyframes crt-collapse {
+  0%   { transform: scale(1, 1);        opacity: 1; }
+  55%  { transform: scale(1, 0.006);    opacity: 1; }
+  85%  { transform: scale(0.012, 0.006); opacity: 1; }
+  100% { transform: scale(0, 0);        opacity: 0; }
+}
+
+.crt-collapse {
+  animation: crt-collapse 0.6s ease-in forwards;
+}
+
+/* Respect "reduce motion": no collapse animation */
+@media (prefers-reduced-motion: reduce) {
+  .crt-collapse-overlay {
+    display: none;
+  }
+}
+
+/* Channel Guide (CH 0): the listing scrolls up forever; --guide-shift is one copy of the list */
+@keyframes guide-scroll {
+  from { transform: translateY(0); }
+  to   { transform: translateY(var(--guide-shift)); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .guide-scroll {
+    animation: none !important;
+  }
+}

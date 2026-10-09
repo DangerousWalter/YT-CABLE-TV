@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<widget xmlns="http://www.w3.org/ns/widgets" xmlns:tizen="http://tizen.org/ns/widgets"
+        id="http://retrocabletv.app/launcher" version="1.0.0" viewmodes="maximized">
+  <tizen:application id="RetroTvApp.RetroCableTV" package="RetroTvApp" required_version="6.0"/>
+  <content src="index.html"/>
+  <feature name="http://tizen.org/feature/screen.size.all"/>
+  <icon src="icon.png"/>
+  <name>Retro-Cable TV</name>
+  <tizen:profile name="tv-samsung"/>
+
+  <!-- network access, and the remote's extra buttons (color keys, CH+/-) -->
+  <tizen:privilege name="http://tizen.org/privilege/internet"/>
+  <tizen:privilege name="http://tizen.org/privilege/tv.inputdevice"/>
+
+  <!-- the launcher opens your Retro-Cable TV server (any address on your network) -->
+  <access origin="*" subdomains="true"/>
+  <tizen:allow-navigation>*</tizen:allow-navigation>
+
+  <tizen:setting screen-orientation="landscape" context-menu="disable" background-support="disable"
+                 encryption="disable" install-location="auto" hwkey-event="enable"/>
+</widget>

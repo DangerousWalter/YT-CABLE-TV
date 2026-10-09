@@ -1,0 +1,72 @@
+# Builds the installers and attaches them to a GitHub Release.
+# Trigger: push a version tag (e.g. `npm version 1.0.1 && git push --follow-tags`),
+# or run it by hand from the Actions tab (that builds the files but does not publish a release).
+name: Build and release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write   # needed to create the release and upload files
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run dist:win -- --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: release/*.exe
+
+  mac:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run dist:mac -- --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mac
+          path: release/*.dmg
+
+  pi-server:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run bundle:server
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pi-server
+          path: release/retro-cable-tv-server.tar.gz
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, mac, pi-server]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: files
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: files/*
+          generate_release_notes: true

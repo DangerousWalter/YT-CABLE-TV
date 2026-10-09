@@ -1,0 +1,30 @@
+[Unit]
+Description=Retro-Cable TV server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=retrotv
+Group=retrotv
+WorkingDirectory=/opt/retro-cable-tv
+# Settings you can edit: the port, network access, an optional YouTube key
+EnvironmentFile=-/etc/retro-cable-tv.env
+Environment=NODE_ENV=production
+Environment=NODE_NO_WARNINGS=1
+Environment=RETROTV_DATA_DIR=/var/lib/retro-cable-tv
+# systemd creates /var/lib/retro-cable-tv for the service user (the database and settings live there)
+StateDirectory=retro-cable-tv
+ExecStart=@NODE@ /opt/retro-cable-tv/server.cjs
+Restart=on-failure
+RestartSec=5
+
+# keep the service contained: it can only write to its own data folder
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/retro-cable-tv
+
+[Install]
+WantedBy=multi-user.target

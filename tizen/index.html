@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Retro-Cable TV</title>
+<link rel="stylesheet" href="launcher.css">
+</head>
+<body>
+
+<div id="setup" class="screen hidden">
+  <h1>RETRO-CABLE TV</h1>
+  <div class="tag">Connect to your server</div>
+  <p>Type the address of your Retro-Cable TV server (for example, the Raspberry Pi), then choose Connect.</p>
+  <p class="small">Use the Pi's numeric address, like <span class="addr">192.168.1.50:3001</span>. Names such as raspberrypi.local often don't work on TVs.</p>
+  <input id="server" type="text" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="192.168.1.50:3001">
+  <div><button id="connect">Connect</button></div>
+  <p id="setup-error" class="small err"></p>
+</div>
+
+<div id="connecting" class="screen hidden">
+  <h1>RETRO-CABLE TV</h1>
+  <div class="tag">Connecting...</div>
+  <p>Opening <span id="connecting-addr" class="addr"></span> <span id="countdown"></span></p>
+  <p class="small">Press the left or right arrow to change the address.</p>
+</div>
+
+<div id="problem" class="screen hidden">
+  <h1>RETRO-CABLE TV</h1>
+  <div class="tag err" id="problem-title">Can't connect</div>
+  <p id="problem-text"></p>
+  <div><button id="retry">Try again</button><button id="change">Change address</button></div>
+</div>
+
+<iframe id="app" class="hidden" allow="autoplay; fullscreen; encrypted-media" title="Retro-Cable TV"></iframe>
+
+<script src="launcher.js"></script>
+</body>
+</html>

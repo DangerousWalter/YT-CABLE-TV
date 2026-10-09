@@ -1,0 +1,31 @@
+# dependencies and build output
+node_modules/
+dist/
+release/
+*.bak
+
+# secrets: never commit these
+.env
+.env.*
+!.env.example
+
+# databases (each person's channels, profiles and PIN hashes live here)
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+data/
+
+# Samsung TV signing certificates and packages
+*.p12
+*.pwd
+*.wgt
+.buildResult/
+.tizen-*/
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.log

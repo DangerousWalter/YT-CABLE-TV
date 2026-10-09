@@ -1,0 +1,48 @@
+{
+  "name": "yt-cable-tv",
+  "version": "1.0.0",
+  "description": "Retro-Cable TV: your YouTube subscriptions as a vintage cable lineup",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "server": "node server.cjs",
+    "start:web": "npm run build && node server.cjs",
+    "desktop": "npm run build && electron .",
+    "dist:win": "npm run build && electron-builder --win",
+    "dist:mac": "npm run build && electron-builder --mac",
+    "bundle:server": "npm run build && node scripts/bundle-server.cjs"
+  },
+  "keywords": [],
+  "author": "Retro-Cable TV",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "axios": "^1.20.0",
+    "bcryptjs": "^3.0.3",
+    "better-sqlite3": "^13.0.3",
+    "cors": "^2.8.6",
+    "dotenv": "^18.0.5",
+    "express": "^5.2.1",
+    "jsonwebtoken": "^9.0.3",
+    "lucide-react": "^1.49.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "react-youtube": "^10.1.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^6.1.1",
+    "autoprefixer": "^10.6.1",
+    "electron": "^44.7.0",
+    "electron-builder": "^26.15.3",
+    "postcss": "^8.5.28",
+    "tailwindcss": "^4.3.3",
+    "vite": "^8.3.1"
+  },
+  "allowScripts": {
+    "better-sqlite3@13.0.3": true
+  }
+}

@@ -246,16 +246,25 @@ on-screen number pad with a row of colored buttons, and they work like the real 
 | Button | What it does |
 |---|---|
 | Any button (first time) | Powers the "TV" on (this is also what lets the browser play sound) |
-| Up / Down arrows | Channel up / down |
-| CH+ / CH- | Channel up / down |
+| Up / Down arrows (guide hidden) | Channel up / down |
+| Up / Down arrows (guide showing) | Move a yellow highlight through the guide **without changing the channel** |
+| Left / Right arrows (guide showing) | Look later in the day, 30 minutes at a time, up to 4 hours ahead |
+| OK (while browsing the guide) | Tune to the highlighted channel |
+| CH+ / CH- | Channel up / down (always, even while browsing) |
 | 0 to 9 | Type a channel number (0 is the Channel Guide), then wait a moment or press OK |
-| OK | Show or hide the program guide |
-| Left / Right arrows | Volume inside the app (the TV's own volume buttons work too) |
+| OK (not browsing) | Show or hide the program guide |
+| Left / Right arrows (guide hidden) | Volume inside the app (the TV's own volume buttons work too) |
 | Red | Mute |
 | Green | Show or hide the guide |
 | Yellow | Who's watching? (switch profile) |
 | Blue | Jump to CH 0, the Channel Guide |
-| Back | Hide the guide; press again within 3 seconds to exit |
+| Back | Drop the browse highlight; then hide the guide; then press again within 3 seconds to exit |
+
+The highlight drops back to the playing channel by itself after about 12 seconds without a key. The channel that is playing
+is marked with a ▶ in the guide, so you can always tell it from the highlighted one.
+
+Browsing ahead needs the updated server on the Pi (the TV asks it for 8 hours of schedule instead of 4). Rebuild and reinstall
+the Pi bundle (section 5) after updating.
 
 ### If something goes wrong
 - **"Can't reach ..."** The TV can't see the server. Check it's on, on the same network (not a guest Wi-Fi), and that

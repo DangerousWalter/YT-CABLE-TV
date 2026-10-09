@@ -6,6 +6,7 @@ import ProfileManager from './components/ProfileManager';
 import PinPrompt from './components/PinPrompt';
 import StaticOverlay from './components/StaticOverlay';
 import ProgramGuide from './components/ProgramGuide';
+import { MAX_BROWSE_SHIFT, TV_EPG_HOURS } from './lib/guideMath';
 import ThemePicker from './components/ThemePicker';
 import TvProfilePicker from './components/TvProfilePicker';
 import { isTvMode, tvActionForKey, registerTvKeys, listenForLauncherKeys, exitTvApp, tellLauncherReady } from './lib/tv';
@@ -19,6 +20,7 @@ import { configureSounds, unlockAudio, playChannelChange, playPowerOn, playPower
 // Same address as the page itself: the desktop app and `npm run server` serve both, and `npm run dev` proxies /api
 const API_BASE = '/api';
 const GUIDE_REFRESH_MS = 60_000; // keep the guide's "now/next" columns fresh
+const BROWSE_IDLE_MS = 12_000; // TV: the guide highlight drops back to the playing channel after this long without a key
 const IDLE_HIDE_MS = 20_000; // after this long on a channel with no activity, the menu bar and guide slide away
 const BADGE_VISIBLE_MS = 4000; // how long the channel info stays on screen before fading out
 
@@ -255,7 +257,8 @@ export default function App() {
       if (!profileId) return false;
       if (!silent) setLoading(true);
       try {
-        const res = await fetch(`${API_BASE}/epg/${profileId}`);
+        // the TV asks for a longer schedule so you can browse ahead in the guide
+        const res = await fetch(`${API_BASE}/epg/${profileId}${tv ? `?hours=${TV_EPG_HOURS}` : ''}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const body = await res.json();
         if (profileIdRef.current !== profileId) return false; // profile changed mid-request
@@ -275,7 +278,7 @@ export default function App() {
         if (!silent && profileIdRef.current === profileId) setLoading(false);
       }
     },
-    [profileId]
+    [profileId, tv]
   );
 
   // Initial load + whenever the profile changes (start back on the first channel)
@@ -345,6 +348,42 @@ export default function App() {
   );
 
   useEffect(() => () => clearTimeout(dialTimer.current), []);
+
+  // ---- TV: browse the guide without changing channel ----
+  // Up/Down move a highlight through the lineup and Left/Right look later in the day, while the current channel
+  // keeps playing. OK tunes to the highlighted channel; Back (or a few idle seconds) goes back to the playing one.
+  const [browse, setBrowse] = useState({ index: null, shift: 0 }); // index: highlighted row (null = not browsing); shift: 30-minute steps ahead
+  const browseRef = useRef(browse);
+  const browseTimer = useRef(null);
+  const currentIndexRef = useRef(0);
+  currentIndexRef.current = currentChannelIndex;
+
+  const clearBrowse = useCallback(() => {
+    clearTimeout(browseTimer.current);
+    if (browseRef.current.index === null && browseRef.current.shift === 0) return;
+    browseRef.current = { index: null, shift: 0 };
+    setBrowse(browseRef.current);
+  }, []);
+
+  const updateBrowse = useCallback(
+    (next) => {
+      browseRef.current = next;
+      setBrowse(next);
+      clearTimeout(browseTimer.current);
+      browseTimer.current = setTimeout(clearBrowse, BROWSE_IDLE_MS);
+    },
+    [clearBrowse]
+  );
+
+  useEffect(() => () => clearTimeout(browseTimer.current), []);
+
+  // Browsing ends when the guide goes away, the TV powers off, or the channel changes by other means
+  useEffect(() => {
+    if (!showGuide || uiHidden || !powered) clearBrowse();
+  }, [showGuide, uiHidden, powered, clearBrowse]);
+  useEffect(() => {
+    clearBrowse();
+  }, [currentChannelIndex, profileId, clearBrowse]);
 
   // ---- Immersive mode ----
   // After IDLE_HIDE_MS on a channel with no activity, the menu bar and guide slide away. Moving the mouse,
@@ -608,6 +647,11 @@ export default function App() {
       // TV remote: OK opens the guide, CH+/- change channel, the color buttons are shortcuts, Back backs out and then exits
       if (tv) {
         const action = tvActionForKey(e);
+        const browsing = browseRef.current.index !== null;
+        if (action === 'back' && browsing) {
+          clearBrowse(); // first Back drops the highlight, the next one closes the guide
+          return;
+        }
         if (action === 'back') {
           if (showGuide) {
             setShowGuide(false);
@@ -620,6 +664,27 @@ export default function App() {
             tvToastTimer.current = setTimeout(() => setTvToast(''), 2500);
           }
           return;
+        }
+        // Browsing the guide (only while it's on screen; a faded-out guide just comes back on the first key press)
+        if (showGuide && !uiHiddenRef.current && channels.length > 0 && !dialRef.current) {
+          const now = browseRef.current;
+          const at = now.index ?? currentIndexRef.current;
+          if (action === 'up' || action === 'down') {
+            const next = action === 'up' ? (at > 0 ? at - 1 : channels.length - 1) : at < channels.length - 1 ? at + 1 : 0;
+            updateBrowse({ ...now, index: next });
+            return;
+          }
+          if (action === 'left' || action === 'right') {
+            const shift = Math.min(MAX_BROWSE_SHIFT, Math.max(0, now.shift + (action === 'right' ? 1 : -1)));
+            updateBrowse({ index: at, shift });
+            return;
+          }
+          if (action === 'ok' && browsing) {
+            const target = now.index;
+            clearBrowse();
+            if (target !== currentIndexRef.current) setCurrentChannelIndex(target);
+            return;
+          }
         }
         // (when the guide has faded away, the key press has just brought it back, so don't also toggle it off)
         if ((action === 'ok' && !dialRef.current) || action === 'green') {
@@ -693,7 +758,7 @@ export default function App() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [channels, anyModalOpen, powered, showBadge, powerOn, powerOff, applyVolume, toggleMute, pokeUi, keepUiAlive, toggleFullscreen, pressDigit, commitDial, tv, showGuide]);
+  }, [channels, anyModalOpen, powered, clearBrowse, updateBrowse, showBadge, powerOn, powerOff, applyVolume, toggleMute, pokeUi, keepUiAlive, toggleFullscreen, pressDigit, commitDial, tv, showGuide]);
 
   // 5. Add / edit channel
   const openAddChannel = () => {
@@ -1222,6 +1287,8 @@ export default function App() {
           <ProgramGuide
             epg={guideEpg}
             selectedIndex={currentChannelIndex}
+            browseIndex={tv ? browse.index : null}
+            timeShift={tv ? browse.shift : 0}
             onSelect={setCurrentChannelIndex}
             selectMode={selectMode}
             bulkSelected={bulkSelected}

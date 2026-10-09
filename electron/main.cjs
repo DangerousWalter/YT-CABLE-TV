@@ -37,8 +37,6 @@ function buildMenu() {
   const isMac = process.platform === 'darwin';
   const template = [
     ...(isMac ? [{ role: 'appMenu' }] : []),
-    // Needed on a Mac: Cmd+C / Cmd+V / Cmd+A only work in text fields when an Edit menu exists
-    { role: 'editMenu' },
     {
       label: 'View',
       submenu: [

@@ -365,7 +365,7 @@ async function getChannelPlaylist(chan, keys) {
 }
 
 // Calculate virtual live programming math
-function calculateLiveProgram(videos) {
+function calculateLiveProgram(videos, windowHours = EPG_WINDOW_HOURS) {
   if (!videos || videos.length === 0) return null;
 
   const totalDuration = videos.reduce((sum, v) => sum + v.duration_seconds, 0);
@@ -384,8 +384,9 @@ function calculateLiveProgram(videos) {
       // after it, up to EPG_WINDOW_HOURS from now. Times are epoch milliseconds.
       const lineup = [];
       let startsAt = (nowSeconds - offset) * 1000;
-      const windowEnd = nowSeconds * 1000 + EPG_WINDOW_HOURS * 3600 * 1000;
-      for (let k = i; startsAt < windowEnd && lineup.length < 60; k++) {
+      const windowEnd = nowSeconds * 1000 + windowHours * 3600 * 1000;
+      const maxPrograms = Math.max(60, windowHours * 15);
+      for (let k = i; startsAt < windowEnd && lineup.length < maxPrograms; k++) {
         const v = videos[k % videos.length];
         lineup.push({
           videoId: v.yt_video_id,
@@ -585,6 +586,9 @@ app.post('/api/profiles/:id/verify-pin', (req, res) => {
 
 // 3. Get EPG guide & live schedules for a profile
 app.get('/api/epg/:profileId', async (req, res) => {
+  // ?hours=8 asks for a longer lineup (the TV guide uses it so you can browse ahead); default is EPG_WINDOW_HOURS
+  const hoursAsked = Number(req.query.hours);
+  const windowHours = Number.isFinite(hoursAsked) && hoursAsked > 0 ? Math.min(12, Math.max(1, hoursAsked)) : EPG_WINDOW_HOURS;
   const channels = db
     .prepare('SELECT * FROM channels WHERE profile_id = ? ORDER BY channel_number ASC')
     .all(req.params.profileId);
@@ -593,7 +597,7 @@ app.get('/api/epg/:profileId', async (req, res) => {
     channels.map(async (chan) => {
       const sources = stmtSources.all(chan.id).map((r) => r.yt_channel_id);
       const videos = await getChannelPlaylist(chan, sources);
-      const liveProgram = calculateLiveProgram(videos);
+      const liveProgram = calculateLiveProgram(videos, windowHours);
 
       return {
         id: chan.id,

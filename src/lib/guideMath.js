@@ -5,6 +5,8 @@
 export const SLOT_MIN = 30;
 export const SLOT_COUNT = 8; // 4 hours on the axis
 export const SLOT_MS = SLOT_MIN * 60000;
+export const MAX_BROWSE_SHIFT = 8; // TV: how many 30-minute steps ahead you can look (4 hours)
+export const TV_EPG_HOURS = ((SLOT_COUNT + MAX_BROWSE_SHIFT) * SLOT_MIN) / 60; // schedule the TV asks the server for
 
 // Sizes at the base screen width. Everything grows with the screen (see getGuideMetrics).
 const BASE_LABEL_W = 208; // channel column (px)

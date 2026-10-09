@@ -26,6 +26,7 @@ const GuideRow = memo(function GuideRow({
   chan,
   idx,
   selected,
+  browsing,
   checked,
   selectMode,
   now,
@@ -57,6 +58,7 @@ const GuideRow = memo(function GuideRow({
 
   let rowBg = 'bg-gray-950 hover:bg-gray-900';
   if (selectMode && checked) rowBg = 'bg-red-950';
+  else if (browsing) rowBg = 'bg-yellow-950';
   else if (selected) rowBg = 'bg-blue-950';
 
   return (
@@ -65,7 +67,9 @@ const GuideRow = memo(function GuideRow({
         if (!selectMode) actions.select(idx);
         else if (!chan.virtual) actions.toggle(chan.id); // built-in channels can't be selected for deletion
       }}
-      className={`group flex border-b border-gray-800 cursor-pointer transition-colors ${rowBg}`}
+      className={`group flex border-b border-gray-800 cursor-pointer transition-colors ${rowBg} ${
+        browsing ? 'ring-2 ring-inset ring-yellow-400 z-10' : ''
+      }`}
       style={{ position: 'absolute', top: idx * rowH, left: 0, right: 0, height: rowH }}
     >
       {/* channel label (stays put while scrolling sideways) */}
@@ -84,7 +88,9 @@ const GuideRow = memo(function GuideRow({
             className="accent-yellow-500 shrink-0"
           />
         )}
-        <span className="shrink-0 text-[0.85em]">CH {chan.number}</span>
+        <span className="shrink-0 text-[0.85em]">
+          {selected && !selectMode ? '▶ ' : ''}CH {chan.number}
+        </span>
         <span className="truncate text-[1em]">{chan.name}</span>
         {chan.sources?.length > 1 && (
           <span className="shrink-0 text-[0.7em] text-yellow-300 font-normal">[{chan.sources.length}]</span>
@@ -161,6 +167,8 @@ const GuideRow = memo(function GuideRow({
 export default function ProgramGuide({
   epg,
   selectedIndex,
+  browseIndex = null, // TV: the highlighted row while browsing (the channel playing stays put)
+  timeShift = 0, // TV: how many 30-minute steps ahead the guide is showing
   onSelect,
   selectMode,
   bulkSelected,
@@ -218,18 +226,20 @@ export default function ProgramGuide({
   // "Now" on the server's clock (so a TV or PC with a drifting clock still lines up)
   const skewMs = epg.skewMs || 0;
   const now = Date.now() + skewMs;
-  const axisStart = Math.floor(now / SLOT_MS) * SLOT_MS;
+  const baseAxisStart = Math.floor(now / SLOT_MS) * SLOT_MS;
+  const axisStart = baseAxisStart + timeShift * SLOT_MS;
   const nowX = ((now - axisStart) / 60000) * pxPerMin;
+  const nowOnAxis = nowX >= 0 && nowX <= axisW;
 
   // When the axis slides forward by a slot, shift the scroll with it so nothing appears to jump
   useLayoutEffect(() => {
     const el = scrollRef.current;
-    if (el && prevAxisStart.current !== null && prevAxisStart.current !== axisStart) {
-      const shiftPx = ((axisStart - prevAxisStart.current) / 60000) * pxPerMin;
+    if (el && prevAxisStart.current !== null && prevAxisStart.current !== baseAxisStart) {
+      const shiftPx = ((baseAxisStart - prevAxisStart.current) / 60000) * pxPerMin;
       el.scrollLeft = Math.max(0, el.scrollLeft - shiftPx);
     }
-    prevAxisStart.current = axisStart;
-  }, [axisStart]);
+    prevAxisStart.current = baseAxisStart;
+  }, [baseAxisStart]);
 
   const scrollToNow = (smooth = true) => {
     scrollRef.current?.scrollTo({ left: Math.max(0, nowX - 40 * scale), behavior: smooth ? 'smooth' : 'auto' });
@@ -255,15 +265,16 @@ export default function ProgramGuide({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [epg.data.length]);
 
-  // Keep the selected channel's row on screen when changing channels with the arrow keys
+  // Keep the selected channel's row (or, while browsing on a TV, the highlighted row) on screen
+  const focusIndex = browseIndex ?? selectedIndex;
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    const top = headerH + selectedIndex * rowH;
+    const top = headerH + focusIndex * rowH;
     if (top < el.scrollTop + headerH) el.scrollTop = top - headerH;
     else if (top + rowH > el.scrollTop + el.clientHeight) el.scrollTop = top + rowH - el.clientHeight;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedIndex]);
+  }, [focusIndex]);
 
   // Stable handlers for the rows (so memoized rows aren't redrawn just because the parent was)
   const latest = useRef({});
@@ -298,6 +309,7 @@ export default function ProgramGuide({
         chan={chan}
         idx={idx}
         selected={idx === selectedIndex}
+        browsing={idx === browseIndex}
         checked={checkedIds.has(chan.id)}
         selectMode={selectMode}
         now={now}
@@ -330,13 +342,17 @@ export default function ProgramGuide({
             className="sticky left-0 z-50 shrink-0 bg-gray-900 flex items-center px-2 border-r border-gray-700"
             style={{ width: labelW }}
           >
-            <button
-              onClick={() => scrollToNow(true)}
-              className="text-[0.8em] font-bold text-red-400 hover:text-red-300 tracking-wider"
-              title="Scroll back to the current time"
-            >
-              ▶ NOW {fmtTime(now)}
-            </button>
+            {timeShift > 0 ? (
+              <span className="text-[0.8em] font-bold text-yellow-300 tracking-wider">+{fmtDuration(timeShift * SLOT_MS)} LATER</span>
+            ) : (
+              <button
+                onClick={() => scrollToNow(true)}
+                className="text-[0.8em] font-bold text-red-400 hover:text-red-300 tracking-wider"
+                title="Scroll back to the current time"
+              >
+                ▶ NOW {fmtTime(now)}
+              </button>
+            )}
           </div>
           <div className="relative shrink-0" style={{ width: axisW }}>
             {Array.from({ length: SLOT_COUNT }, (_, i) => (
@@ -349,10 +365,12 @@ export default function ProgramGuide({
               </div>
             ))}
             {/* marker for "now" on the axis */}
+            {nowOnAxis && (
             <div
               className="absolute bottom-0 w-0 h-0 border-l-[0.36em] border-r-[0.36em] border-b-[0.43em] border-l-transparent border-r-transparent border-b-red-500"
               style={{ left: nowX - fontPx * 0.36 }}
             />
+            )}
           </div>
         </div>
 
@@ -361,10 +379,12 @@ export default function ProgramGuide({
           {visibleRows}
 
           {/* the vertical "now" line */}
-          <div
-            className="absolute top-0 bottom-0 w-0.5 bg-red-500/90 z-20 pointer-events-none shadow-[0_0_6px_rgba(239,68,68,0.8)]"
-            style={{ left: labelW + nowX - 1 }}
-          />
+          {nowOnAxis && (
+            <div
+              className="absolute top-0 bottom-0 w-0.5 bg-red-500/90 z-20 pointer-events-none shadow-[0_0_6px_rgba(239,68,68,0.8)]"
+              style={{ left: labelW + nowX - 1 }}
+            />
+          )}
         </div>
       </div>
     </div>

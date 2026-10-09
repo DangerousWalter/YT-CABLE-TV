@@ -1,0 +1,6 @@
+# Keep line endings consistent between Windows and Mac (otherwise every file looks "changed" when you switch computers)
+* text=auto
+
+# These run on the Raspberry Pi (Linux), so they must always use Linux line endings
+*.sh text eol=lf
+*.service text eol=lf

@@ -828,6 +828,9 @@ app.get('/api/sync/:ytChannelId', async (req, res) => {
 const IMPORT_MAX = 500; // channels per import (each costs ~2 YouTube quota units)
 const IMPORT_CONCURRENCY = 4;
 const UC_ID_RE = /^UC[\w-]{22}$/;
+// A lineup file may name a YouTube source the way the app stored it: a channel ID (UC...), an uploads playlist ID (UU...),
+// or an @handle (channels you added by typing a handle are kept as that handle). Letters, digits, . _ - and an optional leading @ only.
+const LINEUP_SOURCE_RE = /^@?[\p{L}\p{N}_.-]{1,100}$/u;
 const importJobs = new Map();
 
 async function runPool(items, limit, worker) {
@@ -1022,7 +1025,7 @@ app.post('/api/profiles/:id/lineup/import', (req, res) => {
     const seen = new Set();
     for (const s of Array.isArray(c?.sources) ? c.sources : []) {
       const id = String(s?.id || '').trim();
-      if (!UC_ID_RE.test(id) || seen.has(id)) continue;
+      if (!LINEUP_SOURCE_RE.test(id) || seen.has(id)) continue;
       seen.add(id);
       sources.push({ id, title: String(s?.title || '').replace(/\s+/g, ' ').trim().slice(0, 200) });
     }

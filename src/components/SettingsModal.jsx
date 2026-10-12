@@ -186,7 +186,8 @@ export default function SettingsModal({ apiBase, firstRun, profile, onClose, onC
           )}
         </section>
 
-        {canEdit && profile && !firstRun && info?.hasApiKey && (
+        {/* Not limited to the computer running the server: you can share or import a lineup from any browser on your network */}
+        {profile && !firstRun && info?.hasApiKey && (
           <LineupTransfer profile={profile} apiBase={apiBase} onChanged={onLineupChanged} />
         )}
 

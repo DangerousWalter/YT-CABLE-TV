@@ -2,7 +2,7 @@
 
 | Where | What you get | Built on |
 |---|---|---|
-| Windows laptop | an installer (`Retro-Cable TV Setup 1.0.0.exe`) | the Windows laptop |
+| Windows laptop | an installer (`Retro-Cable-TV-Setup-1.1.0.exe`) | the Windows laptop |
 | Mac laptop | disk images (`.dmg`), one for Apple Silicon and one for Intel | the Mac |
 | Raspberry Pi 4 (headless) | a background service that your TVs, phones and laptops connect to | a tarball made on either laptop, installed on the Pi |
 | Samsung TV | a small launcher app that opens your Pi (or laptop) full screen; or just the TV's web browser | the `tizen/` folder, packaged with Samsung's Tizen Studio (section 7) |
@@ -56,7 +56,7 @@ On the Mac:
 ```
 npm run dist:mac
 ```
-`release/` gets two `.dmg` files: `...-arm64.dmg` for Apple Silicon (M1 and newer) and the other one for Intel Macs.
+`release/` gets two `.dmg` files: `...-arm64.dmg` for Apple Silicon (M1 and newer) and `...-x64.dmg` for Intel Macs.
 Open the right one and drag the app into Applications.
 
 The app isn't signed or notarized (that needs a paid Apple developer account), so the first launch may be blocked:

@@ -1,6 +1,6 @@
 # Settings for building the installers. Build each one on its own operating system:
-#   Windows:  npm run dist:win     ->  release/Retro-Cable TV Setup <version>.exe
-#   macOS:    npm run dist:mac     ->  release/Retro-Cable TV-<version>-<arch>.dmg   (Apple Silicon and Intel)
+#   Windows:  npm run dist:win     ->  release/Retro-Cable-TV-Setup-<version>.exe
+#   macOS:    npm run dist:mac     ->  release/Retro-Cable-TV-<version>-<arch>.dmg   (Apple Silicon and Intel)
 appId: com.retrocabletv.app
 productName: Retro-Cable TV
 copyright: Retro-Cable TV
@@ -36,6 +36,7 @@ nsis:
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
   shortcutName: Retro-Cable TV
+  artifactName: Retro-Cable-TV-Setup-${version}.${ext}
 
 mac:
   target:
@@ -48,3 +49,4 @@ mac:
 
 dmg:
   title: Retro-Cable TV
+  artifactName: Retro-Cable-TV-${version}-${arch}.${ext}

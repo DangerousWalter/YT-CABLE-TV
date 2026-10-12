@@ -18,9 +18,12 @@ Get the latest files from the [Releases page](../../releases/latest).
 | You have | Download |
 |---|---|
 | Windows | `Retro-Cable-TV-Setup-<version>.exe` |
-| Mac with Apple Silicon (M1 or later) | the `.dmg` with `arm64` in its name |
-| Mac with an Intel chip | the other `.dmg` |
+| Mac with Apple Silicon (M1 or later) | `Retro-Cable-TV-<version>-arm64.dmg` |
+| Mac with an Intel chip | `Retro-Cable-TV-<version>-x64.dmg` |
 | Raspberry Pi 4 | `retro-cable-tv-server.tar.gz` (see [PACKAGING.md](PACKAGING.md), section 5) |
+
+Not sure which Mac you have? Click the Apple menu, then **About This Mac**. If it says "Chip: Apple M...", pick `arm64`;
+if it says "Processor: Intel...", pick `x64`.
 
 The installers are not code-signed, so your computer will warn you the first time:
 

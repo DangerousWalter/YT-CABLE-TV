@@ -1345,17 +1345,17 @@ export default function App() {
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-gray-400 mb-1">YOUTUBE CHANNELS (one per line)</label>
+                <label className="block text-xs font-bold text-gray-400 mb-1">YOUTUBE CHANNELS & PLAYLISTS (one per line)</label>
                 <textarea
                   rows={4}
-                  placeholder={'@TechnologyConnections\nUC3KEoMzBxf83ECxQGYOERFw'}
+                  placeholder={'@TechnologyConnections\nUC3KEoMzBxf83ECxQGYOERFw\nhttps://www.youtube.com/playlist?list=PL…'}
                   value={form.sources}
                   onChange={updateForm('sources')}
                   className={`${inputClass} font-mono text-sm`}
                   required
                 />
                 <p className="text-xs text-gray-500 mt-1">
-                  Use a @handle or a UC… channel ID. Add several to mix them into one TV channel.
+                  Use a @handle, a UC… channel ID, or paste a playlist link (or PL… ID). A playlist plays in its own order. Add several to mix them into one TV channel.
                 </p>
               </div>
 

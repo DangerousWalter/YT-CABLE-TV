@@ -64,6 +64,7 @@ const MIN_DURATION_SECONDS = Number(process.env.MIN_VIDEO_SECONDS) || 61; // dro
 const SYNC_TTL_HOURS = Number(process.env.SYNC_TTL_HOURS) || 24; // how old the cache may get before a refresh
 const RETRY_COOLDOWN_MS = 5 * 60 * 1000; // don't hammer YouTube if a sync keeps failing
 const EPG_WINDOW_HOURS = Number(process.env.EPG_WINDOW_HOURS) || 4; // how far ahead the guide's lineup reaches
+const MAX_PLAYLIST_VIDEOS = Math.min(Number(process.env.MAX_VIDEOS_PER_PLAYLIST) || 200, 500); // a playlist is read in full, up to this many
 const MAX_SOURCES_PER_CHANNEL = 100; // YouTube channels that can be grouped into one TV channel
 
 // ==========================================
@@ -88,9 +89,21 @@ async function yt(endpoint, params, apiKey) {
   return res.data;
 }
 
-// Handle (@name), channel ID (UC...), or uploads playlist ID (UU...) -> { uploadsPlaylistId, title }
+// A regular YouTube playlist ID (PL... or an album's OLAK5uy_...). Uploads playlists (UU...) are handled as channels.
+const PLAYLIST_ID_RE = /^(?:PL|OLAK5uy_)[\w-]{10,}$/;
+
+// Handle (@name), channel ID (UC...), uploads playlist ID (UU...) or playlist ID (PL...) -> { uploadsPlaylistId, title }
 // A UC.../UU... ID maps straight to its uploads playlist, so the lookup call is only made when we want the title.
 async function resolveChannel(input, { withTitle = true } = {}) {
+  // A regular playlist (PL...): the playlist itself is the source
+  if (PLAYLIST_ID_RE.test(input)) {
+    if (!withTitle) return { uploadsPlaylistId: input, title: null, isPlaylist: true };
+    const items = (await yt('playlists', { part: 'snippet', id: input })).items || [];
+    if (items.length === 0) return { uploadsPlaylistId: null, title: null, isPlaylist: true };
+    const sn = items[0].snippet || {};
+    return { uploadsPlaylistId: input, title: sn.title ? `${sn.title} (playlist)` : null, isPlaylist: true };
+  }
+
   const isUU = /^UU[\w-]{22}$/.test(input);
   const isUC = /^UC[\w-]{22}$/.test(input);
 
@@ -162,31 +175,53 @@ async function doSync(key) {
 
   try {
     const haveTitle = Boolean(db.prepare('SELECT 1 FROM source_titles WHERE yt_channel_id = ?').get(key));
-    const { uploadsPlaylistId, title } = await resolveChannel(cleanInput, { withTitle: !haveTitle });
+    const { uploadsPlaylistId, title, isPlaylist } = await resolveChannel(cleanInput, { withTitle: !haveTitle });
     if (!uploadsPlaylistId) {
       console.error(`Could not resolve channel or handle for: "${cleanInput}"`);
-      return { ok: false, count: 0, reason: `Could not find a YouTube channel for "${key}"` };
+      return {
+        ok: false,
+        count: 0,
+        reason: isPlaylist ? `Could not find a public YouTube playlist for "${key}"` : `Could not find a YouTube channel for "${key}"`,
+      };
     }
 
-    const playlist = await yt('playlistItems', {
-      part: 'snippet',
-      playlistId: uploadsPlaylistId,
-      maxResults: MAX_VIDEOS,
-    });
-    const videoIds = (playlist.items || []).map((i) => i.snippet.resourceId.videoId);
+    // A channel: its newest videos. A playlist: the whole list (several pages), kept in playlist order.
+    const wanted = isPlaylist ? MAX_PLAYLIST_VIDEOS : MAX_VIDEOS;
+    const videoIds = [];
+    let pageToken;
+    do {
+      const page = await yt('playlistItems', {
+        part: 'snippet',
+        playlistId: uploadsPlaylistId,
+        maxResults: Math.min(50, wanted - videoIds.length),
+        ...(pageToken ? { pageToken } : {}),
+      });
+      for (const i of page.items || []) {
+        const id = i.snippet?.resourceId?.videoId;
+        if (id && !videoIds.includes(id)) videoIds.push(id);
+      }
+      pageToken = isPlaylist && videoIds.length < wanted ? page.nextPageToken : undefined;
+    } while (pageToken);
     if (videoIds.length === 0) {
-      return { ok: false, count: 0, reason: 'That channel has no public videos' };
+      return { ok: false, count: 0, reason: isPlaylist ? 'That playlist has no public videos' : 'That channel has no public videos' };
     }
 
-    const details = await yt('videos', {
-      part: 'contentDetails,snippet,status',
-      id: videoIds.join(','),
-    });
+    const detailItems = [];
+    for (let i = 0; i < videoIds.length; i += 50) {
+      const details = await yt('videos', {
+        part: 'contentDetails,snippet,status',
+        id: videoIds.slice(i, i + 50).join(','),
+      });
+      detailItems.push(...(details.items || []));
+    }
+    // videos.list does not return them in the order asked for
+    const position = new Map(videoIds.map((id, i) => [id, i]));
+    detailItems.sort((a, b) => position.get(a.id) - position.get(b.id));
 
     // Keep only what can actually play in an embedded, scheduled loop
     const skipped = { short: 0, notEmbeddable: 0, live: 0 };
     const eligible = [];
-    for (const item of details.items || []) {
+    for (const item of detailItems) {
       const seconds = parseISODuration(item.contentDetails?.duration);
       const live = item.snippet?.liveBroadcastContent;
 
@@ -199,7 +234,11 @@ async function doSync(key) {
         title: item.snippet.title,
         duration_seconds: seconds,
         thumbnail_url: item.snippet.thumbnails?.high?.url || item.snippet.thumbnails?.default?.url || '',
-        published_at: item.snippet.publishedAt,
+        // Channels play oldest-first by upload date. A playlist plays in the order its owner arranged it, so the
+        // position is stored as a stand-in date (1 second apart) and the usual sort keeps that order.
+        published_at: isPlaylist
+          ? new Date(Date.UTC(2000, 0, 1) + (position.get(item.id) || 0) * 1000).toISOString()
+          : item.snippet.publishedAt,
       });
     }
 
@@ -306,12 +345,30 @@ async function getVideosForEpg(key) {
 const stmtSources = db.prepare('SELECT yt_channel_id FROM channel_sources WHERE channel_id = ? ORDER BY id ASC');
 
 // Accepts an array or a newline/comma separated string; trims and removes exact duplicates
+// Pasted YouTube links become the source they point at: a playlist link -> its list ID,
+// a /channel/UC... link -> the channel ID, a youtube.com/@name link -> @name. Anything else is left as typed.
+function sourceFromLink(text) {
+  if (!/^(?:https?:\/\/)?(?:www\.|m\.|music\.)?(?:youtube\.com|youtu\.be)\//i.test(text)) return text;
+  try {
+    const url = new URL(/^https?:/i.test(text) ? text : `https://${text}`);
+    const list = url.searchParams.get('list');
+    if (list && /^[\w-]{10,}$/.test(list)) return list;
+    const channel = url.pathname.match(/^\/channel\/(UC[\w-]{22})/);
+    if (channel) return channel[1];
+    const handle = url.pathname.match(/^\/(@[^/]+)/);
+    if (handle) return decodeURIComponent(handle[1]);
+  } catch {
+    /* not a link after all: keep what was typed */
+  }
+  return text;
+}
+
 function parseSources(input) {
   const list = Array.isArray(input) ? input : String(input ?? '').split(/[\n,]+/);
   const seen = new Set();
   const out = [];
   for (const raw of list) {
-    const key = String(raw).trim();
+    const key = sourceFromLink(String(raw).trim());
     if (key && !seen.has(key)) {
       seen.add(key);
       out.push(key);
@@ -1125,12 +1182,12 @@ async function runLineupJob(job, profileId, channels, theme) {
         'INSERT INTO channels (profile_id, channel_number, name, category, yt_channel_id) VALUES (?, ?, ?, ?, ?)'
       );
       const insertSource = db.prepare('INSERT INTO channel_sources (channel_id, yt_channel_id) VALUES (?, ?)');
-      const used = new Set(existing);
 
       for (const c of [...channels].sort((a, b) => (a.number || 1e9) - (b.number || 1e9))) {
-        const keys = c.sources.map((s) => s.id).filter((id) => playable.has(id) && !used.has(id));
+        // Only sources already in this profile are skipped. The same source may appear in several channels of the
+        // file (that is allowed in the app), so each channel gets all of its own sources.
+        const keys = c.sources.map((s) => s.id).filter((id) => playable.has(id) && !existing.has(id));
         if (keys.length === 0) continue;
-        keys.forEach((k) => used.add(k));
         // keep the original number when it's free, otherwise add at the end
         let number = c.number;
         if (!number || taken.has(number)) number = ++next;

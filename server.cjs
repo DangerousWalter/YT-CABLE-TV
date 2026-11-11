@@ -61,6 +61,11 @@ app.use(express.json({ limit: '2mb' })); // subscription imports can be a few hu
 // ==========================================
 const MAX_VIDEOS = Math.min(Number(process.env.MAX_VIDEOS_PER_CHANNEL) || 50, 50); // YouTube caps a page at 50
 const MIN_DURATION_SECONDS = Number(process.env.MIN_VIDEO_SECONDS) || 61; // drops Shorts-length clips
+// Drops ended 24/7 live-stream recordings, which YouTube can report as hundreds of days long and which would
+// otherwise take over a channel's whole schedule (and often can't be played in an embed anyway)
+const MAX_DURATION_SECONDS = (Number(process.env.MAX_VIDEO_HOURS) || 12) * 3600;
+// A video YouTube refused to play (reported by a player) stays out of schedules this long, then gets another try
+const UNPLAYABLE_TTL_DAYS = Number(process.env.UNPLAYABLE_TTL_DAYS) || 30;
 const SYNC_TTL_HOURS = Number(process.env.SYNC_TTL_HOURS) || 24; // how old the cache may get before a refresh
 const RETRY_COOLDOWN_MS = 5 * 60 * 1000; // don't hammer YouTube if a sync keeps failing
 const EPG_WINDOW_HOURS = Number(process.env.EPG_WINDOW_HOURS) || 4; // how far ahead the guide's lineup reaches
@@ -150,10 +155,21 @@ async function getSourceTitle(key) {
 
 // The ONE place videos are read for scheduling. Always the same deterministic order,
 // whether the data was just synced or cached, so the schedule never reshuffles.
+// Playable videos only: also leaves out anything already cached that is now over the length cap, and
+// anything a player recently reported YouTube won't play
 function getChannelVideos(key) {
   return db
-    .prepare('SELECT * FROM videos WHERE yt_channel_id = ? ORDER BY published_at ASC, yt_video_id ASC')
-    .all(key);
+    .prepare(
+      `SELECT v.* FROM videos v
+       WHERE v.yt_channel_id = ?
+         AND v.duration_seconds <= ?
+         AND NOT EXISTS (
+           SELECT 1 FROM unplayable_videos u
+           WHERE u.yt_video_id = v.yt_video_id AND u.failed_at > datetime('now', ?)
+         )
+       ORDER BY v.published_at ASC, v.yt_video_id ASC`
+    )
+    .all(key, MAX_DURATION_SECONDS, `-${UNPLAYABLE_TTL_DAYS} days`);
 }
 
 function isCacheFresh(key) {
@@ -219,7 +235,7 @@ async function doSync(key) {
     detailItems.sort((a, b) => position.get(a.id) - position.get(b.id));
 
     // Keep only what can actually play in an embedded, scheduled loop
-    const skipped = { short: 0, notEmbeddable: 0, live: 0 };
+    const skipped = { short: 0, long: 0, notEmbeddable: 0, live: 0 };
     const eligible = [];
     for (const item of detailItems) {
       const seconds = parseISODuration(item.contentDetails?.duration);
@@ -228,6 +244,7 @@ async function doSync(key) {
       if (item.status?.embeddable === false) { skipped.notEmbeddable++; continue; }
       if (live && live !== 'none') { skipped.live++; continue; }
       if (seconds < MIN_DURATION_SECONDS) { skipped.short++; continue; }
+      if (seconds > MAX_DURATION_SECONDS) { skipped.long++; continue; }
 
       eligible.push({
         yt_video_id: item.id,
@@ -243,7 +260,7 @@ async function doSync(key) {
     }
 
     if (eligible.length === 0) {
-      return { ok: false, count: 0, reason: 'No playable videos found (all were Shorts, live, or not embeddable)' };
+      return { ok: false, count: 0, reason: 'No playable videos found (all were Shorts, too long, live, or not embeddable)' };
     }
 
     // Upsert the fresh set, then drop anything for this channel that's no longer in it
@@ -271,7 +288,7 @@ async function doSync(key) {
     if (title) saveTitle.run(key, title);
 
     console.log(
-      `Synced ${eligible.length} videos (skipped: ${skipped.short} short, ` +
+      `Synced ${eligible.length} videos (skipped: ${skipped.short} short, ${skipped.long} too long, ` +
         `${skipped.notEmbeddable} not embeddable, ${skipped.live} live/upcoming)`
     );
     return { ok: true, count: eligible.length };
@@ -877,6 +894,23 @@ app.get('/api/sync/:ytChannelId', async (req, res) => {
   const key = String(req.params.ytChannelId).trim();
   const result = await syncChannel(key);
   res.json({ ...result, syncedCount: result.count, videos: getChannelVideos(key) });
+});
+
+// A player reports that YouTube refused to play a video. Only the lasting errors count
+// (100 removed/private, 101 and 150 embedding not allowed); a passing glitch shouldn't pull a video.
+// The video then stays out of every schedule, on every device, for UNPLAYABLE_TTL_DAYS.
+const LASTING_PLAYER_ERRORS = new Set([100, 101, 150]);
+app.post('/api/videos/:videoId/unplayable', (req, res) => {
+  const videoId = String(req.params.videoId);
+  const code = Number(req.body?.code);
+  if (!/^[\w-]{11}$/.test(videoId)) return res.status(400).json({ error: 'Not a YouTube video ID.' });
+  if (!LASTING_PLAYER_ERRORS.has(code)) return res.status(400).json({ error: 'Only lasting player errors are recorded.' });
+  db.prepare(
+    `INSERT INTO unplayable_videos (yt_video_id, error_code, failed_at) VALUES (?, ?, CURRENT_TIMESTAMP)
+     ON CONFLICT(yt_video_id) DO UPDATE SET error_code = excluded.error_code, failed_at = excluded.failed_at`
+  ).run(videoId, code);
+  console.log(`Video ${videoId} reported unplayable (player error ${code}); left out of schedules for ${UNPLAYABLE_TTL_DAYS} days`);
+  res.json({ ok: true });
 });
 
 // ==========================================

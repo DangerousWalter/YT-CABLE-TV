@@ -531,6 +531,41 @@ export default function App() {
     retune();
   }, [retune]);
 
+  // Player says YouTube won't play this video. For the lasting errors (100 removed/private,
+  // 101/150 embedding not allowed) tell the server, which leaves the video out of every schedule,
+  // then retune so the channel moves on to its next program. Passing glitches just retry later.
+  // The "PLEASE STAND BY" card stays up in the meantime.
+  const errorTimer = useRef(null);
+  const erroredKey = useRef(null);
+  const handlePlayerError = useCallback(
+    async (code, videoId, tuneKey) => {
+      if (erroredKey.current === tuneKey) return; // the player can report the same failure twice
+      erroredKey.current = tuneKey;
+      clearTimeout(errorTimer.current);
+      console.warn(`YouTube player error ${code} on video ${videoId}`);
+
+      if ([100, 101, 150].includes(code)) {
+        let reported = false;
+        try {
+          const res = await fetch(`${API_BASE}/videos/${encodeURIComponent(videoId)}/unplayable`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ code }),
+          });
+          reported = res.ok;
+        } catch {
+          /* server unreachable; the retry below tries again */
+        }
+        // Reported: retune after a short "stand by". Not reported: wait longer so we don't hammer the server.
+        errorTimer.current = setTimeout(retune, reported ? 1500 : 30000);
+      } else {
+        errorTimer.current = setTimeout(retune, 10000);
+      }
+    },
+    [retune]
+  );
+  useEffect(() => () => clearTimeout(errorTimer.current), []);
+
   // Keep the sound module in step with the mute button and the FX toggle
   useEffect(() => {
     configureSounds({ enabled: sfxEnabled, muted: isMuted, volume: volume / 100 });
@@ -1154,6 +1189,7 @@ export default function App() {
               muted={isMuted}
               volume={volume}
               onEnded={handleEnded}
+              onError={(code) => handlePlayerError(code, tune.videoId, tune.key)}
             />
           </div>
         ) : tune ? (

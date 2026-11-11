@@ -188,6 +188,16 @@ function initDatabase() {
     console.log('Migrated videos table to per-channel uniqueness.');
   }
 
+  // 3b. Videos a player reported YouTube won't play (embedding off, removed, ...). Kept apart from `videos`
+  //     so a re-sync doesn't bring them back; the server ignores entries older than UNPLAYABLE_TTL_DAYS.
+  db.prepare(`
+    CREATE TABLE IF NOT EXISTS unplayable_videos (
+      yt_video_id TEXT PRIMARY KEY,
+      error_code INTEGER,
+      failed_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `).run();
+
   // Indexes: the EPG filters/sorts videos by channel + publish date on every request
   db.prepare(
     'CREATE INDEX IF NOT EXISTS idx_videos_channel ON videos (yt_channel_id, published_at)'

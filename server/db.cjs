@@ -188,6 +188,13 @@ function initDatabase() {
     console.log('Migrated videos table to per-channel uniqueness.');
   }
 
+  // Migration: where to play a non-YouTube video (an archive.org file). NULL for YouTube videos.
+  try {
+    db.prepare('ALTER TABLE videos ADD COLUMN media_url TEXT').run();
+  } catch (e) {
+    // Column already exists
+  }
+
   // 3b. Videos a player reported YouTube won't play (embedding off, removed, ...). Kept apart from `videos`
   //     so a re-sync doesn't bring them back; the server ignores entries older than UNPLAYABLE_TTL_DAYS.
   db.prepare(`

@@ -139,7 +139,7 @@ const saveTitle = db.prepare(
 async function getSourceTitle(key) {
   const row = db.prepare('SELECT title FROM source_titles WHERE yt_channel_id = ?').get(key);
   if (row) return row.title;
-  if (process.env.YOUTUBE_API_KEY) {
+  if (process.env.YOUTUBE_API_KEY && !String(key).startsWith('ia:')) {
     try {
       const { title } = await resolveChannel(key.replace(/\s+/g, ''));
       if (title) {
@@ -181,7 +181,123 @@ function isCacheFresh(key) {
 
 // --- Sync ---------------------------------------------------------------
 // Result: { ok, count, reason? }. On failure the existing cache is left untouched.
+// ==========================================
+// ARCHIVE.ORG SOURCES ("ia:<item identifier>")
+// ==========================================
+// One archive.org item (e.g. a whole year of a TV show) becomes a source. Its metadata lists every file with its
+// length, so no API key is needed. Each episode is played straight from archive.org with an HTML5 <video>.
+const isArchiveSource = (key) => String(key).startsWith('ia:');
+
+// archive.org gives lengths as seconds ("2594.12") or as a clock ("43:14", "1:02:03")
+function parseArchiveLength(value) {
+  const text = String(value ?? '').trim();
+  if (/^\d+(?:\.\d+)?$/.test(text)) return Math.round(Number(text));
+  const parts = text.split(':').map(Number);
+  if (parts.length < 2 || parts.length > 3 || parts.some((n) => !Number.isFinite(n))) return 0;
+  return Math.round(parts.reduce((total, n) => total * 60 + n, 0));
+}
+
+// "Conan.2011.02.01.Jennifer.Aniston.720p.HDTV.x264-BAJSKORV.mp4" -> "Conan 2011-02-01 Jennifer Aniston"
+function archiveTitle(fileName) {
+  let base = fileName.split('/').pop().replace(/\.(?:mp4|m4v)$/i, '').replace(/\.ia$/i, '');
+  if (!/\s/.test(base)) base = base.replace(/[._]+/g, ' '); // dotted scene-style names
+  base = base.replace(/\s(?:\d{3,4}p|hdtv|web[- ]?dl|webrip|dvdrip|xvid|[xh] ?26[45]|proper|repack|internal)\b.*$/i, '');
+  base = base.replace(/(\d{4})[ .](\d{2})[ .](\d{2})/, '$1-$2-$3').replace(/_\d{1,3}$/, ''); // "..._01" part numbers
+  if (base === base.toLowerCase()) base = base.replace(/\b[a-z]/g, (c) => c.toUpperCase()); // "conan jon hamm"
+  return base.replace(/\s+/g, ' ').trim() || fileName;
+}
+
+// Stable short ID for one file (the videos table and the "unplayable" list key on it)
+const archiveVideoId = (identifier, fileName) =>
+  'ia_' + crypto.createHash('md5').update(`${identifier}/${fileName}`).digest('hex').slice(0, 16);
+
+const archiveFileUrl = (identifier, fileName) =>
+  `https://archive.org/download/${encodeURIComponent(identifier)}/${fileName.split('/').map(encodeURIComponent).join('/')}`;
+
+// One playable file per episode. Items often hold the same episode as an .mkv/.avi original plus an .mp4 copy
+// that archive.org made; only MP4s play in every browser and TV, and an H.264 one is preferred when there are two.
+function pickArchiveEpisodes(files) {
+  const best = new Map();
+  for (const f of files || []) {
+    const name = String(f.name || '');
+    if (!/\.(?:mp4|m4v)$/i.test(name) || /(?:^|[/._ -])sample(?:[/._ -]|$)/i.test(name)) continue;
+    const seconds = parseArchiveLength(f.length);
+    if (!seconds) continue;
+    const episode = name.replace(/\.(?:mp4|m4v)$/i, '').replace(/\.ia$/i, '').toLowerCase();
+    const rank = /h\.?264/i.test(f.format || '') ? 2 : 1;
+    const prev = best.get(episode);
+    if (!prev || rank > prev.rank) best.set(episode, { name, seconds, rank });
+  }
+  return [...best.values()];
+}
+
+async function doArchiveSync(key) {
+  const identifier = key.slice(3);
+  console.log(`\n--- Starting archive.org sync for: "${identifier}" ---`);
+  try {
+    const res = await axios.get(`https://archive.org/metadata/${encodeURIComponent(identifier)}`, { timeout: 30000 });
+    const meta = res.data || {};
+    if (!meta.metadata) return { ok: false, count: 0, reason: `Could not find the archive.org item "${identifier}"` };
+    if (meta.is_dark || String(meta.metadata['access-restricted-item']) === 'true') {
+      return { ok: false, count: 0, reason: `The archive.org item "${identifier}" isn't publicly playable` };
+    }
+
+    const skipped = { short: 0, long: 0 };
+    const eligible = [];
+    for (const ep of pickArchiveEpisodes(meta.files)) {
+      if (ep.seconds < MIN_DURATION_SECONDS) { skipped.short++; continue; }
+      if (ep.seconds > MAX_DURATION_SECONDS) { skipped.long++; continue; }
+      const title = archiveTitle(ep.name);
+      const date = title.match(/(\d{4})-(\d{2})-(\d{2})/);
+      eligible.push({
+        yt_video_id: archiveVideoId(identifier, ep.name),
+        title,
+        duration_seconds: ep.seconds,
+        thumbnail_url: `https://archive.org/services/img/${encodeURIComponent(identifier)}`,
+        // Air date from the file name when it has one, so a single-item channel plays in broadcast order
+        published_at: date ? `${date[1]}-${date[2]}-${date[3]}T00:00:00.000Z` : `2000-01-01T00:00:00.000Z`,
+        media_url: archiveFileUrl(identifier, ep.name),
+      });
+    }
+    if (eligible.length === 0) {
+      return { ok: false, count: 0, reason: `No browser-playable MP4 videos in the archive.org item "${identifier}"` };
+    }
+
+    const upsert = db.prepare(`
+      INSERT INTO videos (yt_video_id, yt_channel_id, title, duration_seconds, thumbnail_url, published_at, media_url)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(yt_channel_id, yt_video_id) DO UPDATE SET
+        title = excluded.title,
+        duration_seconds = excluded.duration_seconds,
+        thumbnail_url = excluded.thumbnail_url,
+        published_at = excluded.published_at,
+        media_url = excluded.media_url,
+        cached_at = CURRENT_TIMESTAMP
+    `);
+    const ids = eligible.map((v) => v.yt_video_id);
+    db.transaction(() => {
+      for (const v of eligible) {
+        upsert.run(v.yt_video_id, key, v.title, v.duration_seconds, v.thumbnail_url, v.published_at, v.media_url);
+      }
+      db.prepare(
+        `DELETE FROM videos WHERE yt_channel_id = ? AND yt_video_id NOT IN (${ids.map(() => '?').join(',')})`
+      ).run(key, ...ids);
+    })();
+
+    const itemTitle = String(meta.metadata.title || '').trim();
+    if (itemTitle) saveTitle.run(key, itemTitle);
+
+    console.log(`Synced ${eligible.length} archive.org videos (skipped: ${skipped.short} short, ${skipped.long} too long)`);
+    return { ok: true, count: eligible.length };
+  } catch (error) {
+    const status = error.response?.status;
+    console.error(`archive.org error for "${identifier}":`, error.message);
+    return { ok: false, count: 0, reason: `archive.org error${status ? ` (HTTP ${status})` : ''}` };
+  }
+}
+
 async function doSync(key) {
+  if (isArchiveSource(key)) return doArchiveSync(key);
   if (!process.env.YOUTUBE_API_KEY) {
     return { ok: false, count: 0, reason: NO_KEY_MESSAGE };
   }
@@ -365,6 +481,9 @@ const stmtSources = db.prepare('SELECT yt_channel_id FROM channel_sources WHERE 
 // Pasted YouTube links become the source they point at: a playlist link -> its list ID,
 // a /channel/UC... link -> the channel ID, a youtube.com/@name link -> @name. Anything else is left as typed.
 function sourceFromLink(text) {
+  // An archive.org item link (details/download/embed page) -> "ia:<item identifier>"
+  const ia = text.match(/^(?:https?:\/\/)?(?:www\.)?archive\.org\/(?:details|download|embed)\/([A-Za-z0-9._-]+)/i);
+  if (ia) return `ia:${ia[1]}`;
   if (!/^(?:https?:\/\/)?(?:www\.|m\.|music\.)?(?:youtube\.com|youtu\.be)\//i.test(text)) return text;
   try {
     const url = new URL(/^https?:/i.test(text) ? text : `https://${text}`);
@@ -468,6 +587,7 @@ function calculateLiveProgram(videos, windowHours = EPG_WINDOW_HOURS) {
           startsAt,
           endsAt: startsAt + v.duration_seconds * 1000,
           durationSeconds: v.duration_seconds,
+          mediaUrl: v.media_url || undefined, // set for archive.org files; YouTube programs leave it out
         });
         startsAt += v.duration_seconds * 1000;
       }
@@ -479,6 +599,7 @@ function calculateLiveProgram(videos, windowHours = EPG_WINDOW_HOURS) {
           seekToSeconds: offset,
           durationSeconds: video.duration_seconds,
           thumbnailUrl: video.thumbnail_url,
+          mediaUrl: video.media_url || undefined,
         },
         next: nextVideo ? { title: nextVideo.title, durationSeconds: nextVideo.duration_seconds } : null,
         upcoming: upcomingVideo ? { title: upcomingVideo.title, durationSeconds: upcomingVideo.duration_seconds } : null,
@@ -897,13 +1018,14 @@ app.get('/api/sync/:ytChannelId', async (req, res) => {
 });
 
 // A player reports that YouTube refused to play a video. Only the lasting errors count
-// (100 removed/private, 101 and 150 embedding not allowed); a passing glitch shouldn't pull a video.
+// (100 removed/private or, for archive.org, a missing or unplayable file; 101 and 150 embedding not allowed);
+// a passing glitch shouldn't pull a video.
 // The video then stays out of every schedule, on every device, for UNPLAYABLE_TTL_DAYS.
 const LASTING_PLAYER_ERRORS = new Set([100, 101, 150]);
 app.post('/api/videos/:videoId/unplayable', (req, res) => {
   const videoId = String(req.params.videoId);
   const code = Number(req.body?.code);
-  if (!/^[\w-]{11}$/.test(videoId)) return res.status(400).json({ error: 'Not a YouTube video ID.' });
+  if (!/^(?:[\w-]{11}|ia_[0-9a-f]{16})$/.test(videoId)) return res.status(400).json({ error: 'Not a video ID.' });
   if (!LASTING_PLAYER_ERRORS.has(code)) return res.status(400).json({ error: 'Only lasting player errors are recorded.' });
   db.prepare(
     `INSERT INTO unplayable_videos (yt_video_id, error_code, failed_at) VALUES (?, ?, CURRENT_TIMESTAMP)

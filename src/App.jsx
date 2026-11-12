@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { Tv, Volume2, VolumeX, PlusCircle, X, RefreshCw, Power, Trash2, Layers, Upload, Users, Palette, Maximize, Minimize, Settings as SettingsIcon } from 'lucide-react';
 import VideoPlayer from './components/VideoPlayer';
+import ArchivePlayer from './components/ArchivePlayer';
 import ImportSubscriptions from './components/ImportSubscriptions';
 import ProfileManager from './components/ProfileManager';
 import PinPrompt from './components/PinPrompt';
@@ -498,6 +499,7 @@ export default function App() {
     const remaining = currentProg.durationSeconds - seek;
     return {
       videoId: currentProg.videoId,
+      mediaUrl: currentProg.mediaUrl || null, // set for archive.org programs
       startSeconds: Math.max(0, Math.floor(seek)),
       endsAt: now + remaining * 1000,
       stale: remaining <= 2, // program already over; need a fresh schedule first
@@ -542,7 +544,7 @@ export default function App() {
       if (erroredKey.current === tuneKey) return; // the player can report the same failure twice
       erroredKey.current = tuneKey;
       clearTimeout(errorTimer.current);
-      console.warn(`YouTube player error ${code} on video ${videoId}`);
+      console.warn(`Player error ${code} on video ${videoId}`);
 
       if ([100, 101, 150].includes(code)) {
         let reported = false;
@@ -1182,15 +1184,27 @@ export default function App() {
           </div>
         ) : tune && !tune.stale ? (
           <div className="w-full h-full">
-            <VideoPlayer
-              key={tune.key}
-              videoId={tune.videoId}
-              startSeconds={tune.startSeconds}
-              muted={isMuted}
-              volume={volume}
-              onEnded={handleEnded}
-              onError={(code) => handlePlayerError(code, tune.videoId, tune.key)}
-            />
+            {tune.mediaUrl ? (
+              <ArchivePlayer
+                key={tune.key}
+                src={tune.mediaUrl}
+                startSeconds={tune.startSeconds}
+                muted={isMuted}
+                volume={volume}
+                onEnded={handleEnded}
+                onError={(code) => handlePlayerError(code, tune.videoId, tune.key)}
+              />
+            ) : (
+              <VideoPlayer
+                key={tune.key}
+                videoId={tune.videoId}
+                startSeconds={tune.startSeconds}
+                muted={isMuted}
+                volume={volume}
+                onEnded={handleEnded}
+                onError={(code) => handlePlayerError(code, tune.videoId, tune.key)}
+              />
+            )}
           </div>
         ) : tune ? (
           tuningSpinner
@@ -1381,10 +1395,10 @@ export default function App() {
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-gray-400 mb-1">YOUTUBE CHANNELS & PLAYLISTS (one per line)</label>
+                <label className="block text-xs font-bold text-gray-400 mb-1">YOUTUBE CHANNELS, PLAYLISTS & ARCHIVE.ORG ITEMS (one per line)</label>
                 <textarea
                   rows={4}
-                  placeholder={'@TechnologyConnections\nUC3KEoMzBxf83ECxQGYOERFw\nhttps://www.youtube.com/playlist?list=PL…'}
+                  placeholder={'@TechnologyConnections\nUC3KEoMzBxf83ECxQGYOERFw\nhttps://www.youtube.com/playlist?list=PL…\nhttps://archive.org/details/…'}
                   value={form.sources}
                   onChange={updateForm('sources')}
                   className={`${inputClass} font-mono text-sm`}

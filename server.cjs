@@ -1036,6 +1036,75 @@ app.post('/api/videos/:videoId/unplayable', (req, res) => {
 });
 
 // ==========================================
+// ARCHIVE.ORG VIDEO RELAY
+// ==========================================
+// Some TVs can't play archive.org files directly (its HTTPS hand-off to a storage server trips up their built-in
+// player). As a fallback the player asks this server for the file instead: the server fetches it from archive.org
+// and passes it along, including the byte ranges a player asks for when seeking. Only archive.org download
+// links are relayed, so this can't be used to fetch anything else.
+const RELAY_ALLOWED = /^https:\/\/archive\.org\/download\/[^?#]+$/;
+app.get('/api/media', async (req, res) => {
+  const src = String(req.query.src || '');
+  if (!RELAY_ALLOWED.test(src)) return res.status(400).send('Only archive.org download links can be relayed.');
+
+  const controller = new AbortController();
+  // Viewer changed channel (connection closed before the file was sent): stop downloading
+  res.on('close', () => {
+    if (!res.writableFinished) controller.abort();
+  });
+  try {
+    const upstream = await axios.get(src, {
+      responseType: 'stream',
+      signal: controller.signal,
+      timeout: 30000, // to get the response started; the stream itself can run as long as the show
+      maxRedirects: 5,
+      headers: req.headers.range ? { Range: req.headers.range } : {},
+      validateStatus: (s) => s === 200 || s === 206 || s === 416,
+    });
+    res.status(upstream.status);
+    for (const h of ['content-type', 'content-length', 'content-range', 'accept-ranges', 'last-modified', 'etag']) {
+      if (upstream.headers[h]) res.setHeader(h, upstream.headers[h]);
+    }
+    if (!upstream.headers['accept-ranges']) res.setHeader('accept-ranges', 'bytes');
+    upstream.data.on('error', () => res.destroy());
+    upstream.data.pipe(res);
+  } catch (error) {
+    if (controller.signal.aborted) return;
+    const status = error.response?.status;
+    console.error(`Relay of ${src} failed:`, status ? `HTTP ${status}` : error.message);
+    if (!res.headersSent) res.status(status === 404 ? 404 : 502).send('Could not get the file from archive.org.');
+    else res.destroy();
+  }
+});
+
+// ==========================================
+// PLAYER DIAGNOSTICS
+// ==========================================
+// Players report playback trouble here (and which way of playing worked), so a problem on one device - the TV,
+// say - can be read from any browser at /api/diagnostics and in the server log. Kept in memory only.
+const diagnostics = [];
+app.post('/api/diagnostics', (req, res) => {
+  const b = req.body || {};
+  const entry = {
+    at: new Date().toISOString(),
+    event: String(b.event || '').slice(0, 40),
+    via: String(b.via || '').slice(0, 20),
+    errorCode: b.errorCode ?? null,
+    message: String(b.message || '').slice(0, 300),
+    networkState: b.networkState ?? null,
+    readyState: b.readyState ?? null,
+    seconds: b.seconds ?? null,
+    video: String(b.video || '').slice(0, 200),
+    device: String(req.headers['user-agent'] || '').slice(0, 250),
+  };
+  diagnostics.push(entry);
+  if (diagnostics.length > 200) diagnostics.shift();
+  console.log(`Player ${entry.event} (${entry.via}): ${entry.errorCode ?? ''} ${entry.message} ${entry.video}`);
+  res.json({ ok: true });
+});
+app.get('/api/diagnostics', (req, res) => res.json(diagnostics.slice().reverse()));
+
+// ==========================================
 // SUBSCRIPTION IMPORT (Google Takeout subscriptions.csv, parsed in the browser)
 // ==========================================
 const IMPORT_MAX = 500; // channels per import (each costs ~2 YouTube quota units)

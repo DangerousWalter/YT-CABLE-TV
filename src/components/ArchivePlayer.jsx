@@ -4,6 +4,11 @@
 // Same props and behaviour as VideoPlayer.jsx, so App.jsx can swap one for the other:
 // starts at the live offset, follows mute/volume, reports the end, and reports errors with
 // the same codes the YouTube player uses (100 = can't be played at all, 2/5 = passing trouble).
+//
+// Two ways to play a file: straight from archive.org, or relayed through our own server (/api/media).
+// Some TVs can't play archive.org's links directly, so if the direct way fails the player retries through
+// the server, and this device remembers that the relay works so later programs start with it.
+// Every failure (and which way finally worked) is reported to /api/diagnostics.
 import React, { useEffect, useRef, useState } from 'react';
 
 const ERROR_TEXT = {
@@ -12,13 +17,47 @@ const ERROR_TEXT = {
   100: 'PROGRAM UNAVAILABLE',
 };
 
-// archive.org can be slow to start a big file, but if nothing plays after this long, give up on it for now
-const STALL_MS = 45000;
+// archive.org can be slow to start a big file, but if nothing plays after this long, try the other way
+const STALL_MS = 30000;
+const PREFER_RELAY_KEY = 'retrotv.archiveViaServer';
+
+let preferRelay = (() => {
+  try {
+    return localStorage.getItem(PREFER_RELAY_KEY) === '1';
+  } catch {
+    return false;
+  }
+})();
+function rememberRelay(value) {
+  preferRelay = value;
+  try {
+    localStorage.setItem(PREFER_RELAY_KEY, value ? '1' : '0');
+  } catch {
+    /* private mode etc.; remembered until the app restarts */
+  }
+}
+
+const relayUrl = (src) => `/api/media?src=${encodeURIComponent(src)}`;
+const MEDIA_ERROR_NAMES = { 1: 'aborted', 2: 'network', 3: 'decode', 4: 'not supported' };
+
+function report(details) {
+  try {
+    fetch('/api/diagnostics', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(details),
+    }).catch(() => {});
+  } catch {
+    /* diagnostics are best-effort */
+  }
+}
 
 export default function ArchivePlayer({ src, startSeconds = 0, muted = false, volume = 100, onEnded, onError }) {
   const videoRef = useRef(null);
   const [errorCode, setErrorCode] = useState(null);
-  const [attempt, setAttempt] = useState(0); // one quiet retry before calling a file unplayable
+  // Which ways to try, in order, for this program
+  const [ways] = useState(() => (preferRelay ? ['server', 'direct'] : ['direct', 'server']));
+  const [attempt, setAttempt] = useState(0);
 
   // Where the broadcast was when we tuned in; a retry adds the time that has passed since
   const startRef = useRef(Math.max(0, Math.floor(startSeconds)));
@@ -38,17 +77,49 @@ export default function ArchivePlayer({ src, startSeconds = 0, muted = false, vo
     const v = videoRef.current;
     if (!v || !src) return undefined;
 
+    const way = ways[attempt];
+    const lastTry = attempt >= ways.length - 1;
     const start = Math.floor(startRef.current + (Date.now() - mountedAt.current) / 1000);
+    const startedAt = Date.now();
     let playing = false;
     let finished = false;
-    let retryTimer = null;
+    let nextTimer = null;
 
-    const fail = (code) => {
+    const describe = (event, extra) =>
+      report({
+        event,
+        via: way,
+        video: src.split('/').pop(),
+        networkState: v.networkState,
+        readyState: v.readyState,
+        seconds: Math.round((Date.now() - startedAt) / 1000),
+        ...extra,
+      });
+
+    // This way didn't work: try the next one, or give up and tell App.jsx
+    const failWay = (code, extra) => {
       if (finished) return;
       finished = true;
       clearTimeout(stallTimer);
-      setErrorCode(code);
-      onErrorRef.current?.(code);
+      describe('error', extra);
+      if (!lastTry) {
+        nextTimer = setTimeout(() => setAttempt((a) => a + 1), 500);
+        return;
+      }
+      if (code !== 100) {
+        setErrorCode(code);
+        onErrorRef.current?.(code);
+        return;
+      }
+      // "Can't be played" pulls the video from every device's schedule, so only say it when the file is really
+      // gone from archive.org. If it's there and just won't play on this device, treat it as passing trouble.
+      fetch(relayUrl(src), { headers: { Range: 'bytes=0-0' } })
+        .then((r) => (r.status === 404 ? 100 : 5))
+        .catch(() => 5)
+        .then((finalCode) => {
+          setErrorCode(finalCode);
+          onErrorRef.current?.(finalCode);
+        });
     };
 
     const tryPlay = () => {
@@ -65,7 +136,6 @@ export default function ArchivePlayer({ src, startSeconds = 0, muted = false, vo
     };
 
     const handleMeta = () => {
-      // The #t= hint usually lands us there already; seek if it didn't
       if (start > 0 && start < v.duration && Math.abs(v.currentTime - start) > 5) {
         try {
           v.currentTime = start;
@@ -76,23 +146,26 @@ export default function ArchivePlayer({ src, startSeconds = 0, muted = false, vo
       tryPlay();
     };
     const handlePlaying = () => {
+      if (playing) return;
       playing = true;
       clearTimeout(stallTimer);
+      // Learn which way works on this device
+      if (way === 'server' && !preferRelay) rememberRelay(true);
+      if (way === 'direct' && preferRelay) rememberRelay(false);
+      if (attempt > 0) describe('played', {});
     };
     const handleEnded = () => onEndedRef.current?.();
     const handleError = () => {
-      if (finished) return;
-      // 4 = the file is missing or in a format this device can't play; anything else is a network hiccup
-      if (v.error?.code === 4) {
-        if (attempt === 0) retryTimer = setTimeout(() => setAttempt(1), 3000);
-        else fail(100);
-      } else {
-        fail(5);
-      }
+      const code = v.error?.code;
+      // 4 = this device can't play the file at all; anything else is network/decoding trouble
+      failWay(code === 4 ? 100 : 5, {
+        errorCode: code ?? null,
+        message: `${MEDIA_ERROR_NAMES[code] || 'unknown'}${v.error?.message ? `: ${v.error.message}` : ''}`,
+      });
     };
 
     const stallTimer = setTimeout(() => {
-      if (!playing) fail(2);
+      if (!playing) failWay(2, { message: `nothing played after ${STALL_MS / 1000}s` });
     }, STALL_MS);
 
     v.addEventListener('loadedmetadata', handleMeta);
@@ -102,11 +175,13 @@ export default function ArchivePlayer({ src, startSeconds = 0, muted = false, vo
 
     v.muted = mutedRef.current;
     v.volume = Math.min(1, Math.max(0, volumeRef.current / 100));
-    v.src = `${src}#t=${start}`;
+    // No "#t=" time hint: some TV players reject it. We seek once the file's length is known instead.
+    v.src = way === 'server' ? relayUrl(src) : src;
+    v.load();
 
     return () => {
       clearTimeout(stallTimer);
-      clearTimeout(retryTimer);
+      clearTimeout(nextTimer);
       v.removeEventListener('loadedmetadata', handleMeta);
       v.removeEventListener('playing', handlePlaying);
       v.removeEventListener('ended', handleEnded);
@@ -115,7 +190,7 @@ export default function ArchivePlayer({ src, startSeconds = 0, muted = false, vo
       v.removeAttribute('src');
       v.load();
     };
-  }, [src, attempt]);
+  }, [src, attempt, ways]);
 
   // Mute toggle (the M key / button)
   useEffect(() => {
